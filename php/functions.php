@@ -495,9 +495,19 @@ function saml_acs() {
 			);
 			set_transient('saml_2fa_' . $user_id, $saml_data, 10 * MINUTE_IN_SECONDS);
 			
-			// Let Two Factor plugin handle the rest
-			// Do not set auth cookies yet - Two Factor will handle this
-			Two_Factor_Core::show_two_factor_login($user);
+			// Set the current user temporarily for 2FA validation
+			wp_set_current_user($user_id);
+			
+			// Redirect to wp-login.php with interim-login flag to trigger 2FA
+			// This allows Two Factor plugin to show its interface properly
+			$redirect_to = !empty($saml_data['relay_state']) ? $saml_data['relay_state'] : home_url();
+			$login_url = add_query_arg(array(
+				'action' => 'saml_2fa',
+				'user_id' => $user_id,
+				'redirect_to' => urlencode($redirect_to)
+			), wp_login_url());
+			
+			wp_redirect($login_url);
 			exit();
 		}
 
@@ -743,55 +753,103 @@ class preventLocalChanges
 $preventLocalChanges = new preventLocalChanges();
 
 /**
+ * Handle the SAML 2FA login action on wp-login.php
+ * This displays the Two Factor authentication form
+ */
+function saml_handle_2fa_login_action() {
+	if (isset($_GET['action']) && $_GET['action'] === 'saml_2fa' && isset($_GET['user_id'])) {
+		$user_id = intval($_GET['user_id']);
+		$saml_data = get_transient('saml_2fa_' . $user_id);
+		
+		if (!$saml_data || !is_array($saml_data)) {
+			// Transient expired or invalid
+			wp_die(__('Two-factor authentication session expired. Please log in again.'));
+		}
+		
+		$user = get_user_by('id', $user_id);
+		if (!$user) {
+			wp_die(__('Invalid user.'));
+		}
+		
+		// Check if Two Factor is still required
+		if (!class_exists('Two_Factor_Core') || !Two_Factor_Core::is_user_using_two_factor($user_id)) {
+			// 2FA is not enabled, complete login
+			saml_complete_login_after_2fa($user);
+			return;
+		}
+		
+		// Set the current user for 2FA validation
+		wp_set_current_user($user_id);
+		
+		// Show the Two Factor authentication form
+		Two_Factor_Core::show_two_factor_login($user);
+		exit();
+	}
+}
+add_action('login_form_saml_2fa', 'saml_handle_2fa_login_action');
+
+/**
+ * Complete SAML login after Two Factor authentication
+ * Sets cookies, fires hooks, and redirects to the appropriate location
+ */
+function saml_complete_login_after_2fa($user) {
+	$user_id = $user->ID;
+	$saml_data = get_transient('saml_2fa_' . $user_id);
+	
+	if (!$saml_data || !is_array($saml_data)) {
+		// No SAML data found, redirect to home
+		wp_redirect(home_url());
+		exit();
+	}
+	
+	// Delete the transient as we're using it now
+	delete_transient('saml_2fa_' . $user_id);
+	
+	// Set SAML-specific cookies now that 2FA is complete
+	$secure = is_ssl();
+	setcookie(SAML_LOGIN_COOKIE, 1, time() + MONTH_IN_SECONDS, SITECOOKIEPATH, COOKIE_DOMAIN, $secure, true);
+	setcookie(SAML_NAMEID_COOKIE, $saml_data['nameid'], time() + MONTH_IN_SECONDS, SITECOOKIEPATH, COOKIE_DOMAIN, $secure, true);
+	setcookie(SAML_SESSIONINDEX_COOKIE, $saml_data['sessionindex'], time() + MONTH_IN_SECONDS, SITECOOKIEPATH, COOKIE_DOMAIN, $secure, true);
+	setcookie(SAML_NAMEID_FORMAT_COOKIE, $saml_data['nameid_format'], time() + MONTH_IN_SECONDS, SITECOOKIEPATH, COOKIE_DOMAIN, $secure, true);
+	setcookie(SAML_NAMEID_NAME_QUALIFIER_COOKIE, $saml_data['nameid_name_qualifier'], time() + MONTH_IN_SECONDS, SITECOOKIEPATH, COOKIE_DOMAIN, $secure, true);
+	setcookie(SAML_NAMEID_SP_NAME_QUALIFIER_COOKIE, $saml_data['nameid_sp_name_qualifier'], time() + MONTH_IN_SECONDS, SITECOOKIEPATH, COOKIE_DOMAIN, $secure, true);
+	
+	// Fire the onelogin_saml_attrs action
+	do_action('onelogin_saml_attrs', $saml_data['attrs'], $user, $user_id, $saml_data['newuser']);
+	
+	// Trigger wp_login hook if enabled
+	$trigger_wp_login_hook = get_site_option('onelogin_saml_trigger_login_hook');
+	if ($trigger_wp_login_hook) {
+		do_action('wp_login', $user->user_login, $user);
+	}
+	
+	// Handle redirect after 2FA completion
+	if (!empty($saml_data['relay_state'])) {
+		$relayState = $saml_data['relay_state'];
+		
+		if ((substr($relayState, -strlen('/wp-login.php')) === '/wp-login.php') || 
+		    (substr($relayState, -strlen('/alternative_acs.php')) === '/alternative_acs.php')) {
+			wp_redirect(home_url());
+		} else {
+			if (strpos($relayState, 'redirect_to') !== false) {
+				$query = wp_parse_url($relayState, PHP_URL_QUERY);
+				parse_str($query, $parameters);
+				redirect_to_relaystate_if_trusted(urldecode($parameters['redirect_to']));
+			} else {
+				redirect_to_relaystate_if_trusted($relayState);
+			}
+		}
+	} else {
+		wp_redirect(home_url());
+	}
+	exit();
+}
+
+/**
  * Handle SAML login completion after Two Factor authentication
  * This hook is called after successful 2FA verification
  */
 function saml_two_factor_authenticated($user) {
-	$user_id = $user->ID;
-	$saml_data = get_transient('saml_2fa_' . $user_id);
-	
-	if ($saml_data && is_array($saml_data)) {
-		// Delete the transient as we're using it now
-		delete_transient('saml_2fa_' . $user_id);
-		
-		// Set SAML-specific cookies now that 2FA is complete
-		$secure = is_ssl();
-		setcookie(SAML_LOGIN_COOKIE, 1, time() + MONTH_IN_SECONDS, SITECOOKIEPATH, COOKIE_DOMAIN, $secure, true);
-		setcookie(SAML_NAMEID_COOKIE, $saml_data['nameid'], time() + MONTH_IN_SECONDS, SITECOOKIEPATH, COOKIE_DOMAIN, $secure, true);
-		setcookie(SAML_SESSIONINDEX_COOKIE, $saml_data['sessionindex'], time() + MONTH_IN_SECONDS, SITECOOKIEPATH, COOKIE_DOMAIN, $secure, true);
-		setcookie(SAML_NAMEID_FORMAT_COOKIE, $saml_data['nameid_format'], time() + MONTH_IN_SECONDS, SITECOOKIEPATH, COOKIE_DOMAIN, $secure, true);
-		setcookie(SAML_NAMEID_NAME_QUALIFIER_COOKIE, $saml_data['nameid_name_qualifier'], time() + MONTH_IN_SECONDS, SITECOOKIEPATH, COOKIE_DOMAIN, $secure, true);
-		setcookie(SAML_NAMEID_SP_NAME_QUALIFIER_COOKIE, $saml_data['nameid_sp_name_qualifier'], time() + MONTH_IN_SECONDS, SITECOOKIEPATH, COOKIE_DOMAIN, $secure, true);
-		
-		// Fire the onelogin_saml_attrs action
-		do_action('onelogin_saml_attrs', $saml_data['attrs'], $user, $user_id, $saml_data['newuser']);
-		
-		// Trigger wp_login hook if enabled
-		$trigger_wp_login_hook = get_site_option('onelogin_saml_trigger_login_hook');
-		if ($trigger_wp_login_hook) {
-			do_action('wp_login', $user->user_login, $user);
-		}
-		
-		// Handle redirect after 2FA completion
-		if (!empty($saml_data['relay_state'])) {
-			$relayState = $saml_data['relay_state'];
-			
-			if ((substr($relayState, -strlen('/wp-login.php')) === '/wp-login.php') || 
-			    (substr($relayState, -strlen('/alternative_acs.php')) === '/alternative_acs.php')) {
-				wp_redirect(home_url());
-			} else {
-				if (strpos($relayState, 'redirect_to') !== false) {
-					$query = wp_parse_url($relayState, PHP_URL_QUERY);
-					parse_str($query, $parameters);
-					redirect_to_relaystate_if_trusted(urldecode($parameters['redirect_to']));
-				} else {
-					redirect_to_relaystate_if_trusted($relayState);
-				}
-			}
-		} else {
-			wp_redirect(home_url());
-		}
-		exit();
-	}
+	saml_complete_login_after_2fa($user);
 }
 add_action('two_factor_user_authenticated', 'saml_two_factor_authenticated');
