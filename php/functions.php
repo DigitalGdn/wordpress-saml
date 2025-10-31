@@ -187,7 +187,8 @@ function saml_slo() {
 	if (isset($_GET['action']) && $_GET['action']  == 'logout') {
 		if (!$slo) {
 			wp_logout();
-			return false;
+			wp_redirect(home_url());
+			exit();
 		} else {
 			$nameId = null;
 			$sessionIndex = null;
@@ -600,14 +601,11 @@ function saml_sls() {
 		setcookie(SAML_NAMEID_NAME_QUALIFIER_COOKIE, null, time() - 3600, SITECOOKIEPATH, COOKIE_DOMAIN, $secure, true);
 		setcookie(SAML_NAMEID_SP_NAME_QUALIFIER_COOKIE, null, time() - 3600, SITECOOKIEPATH, COOKIE_DOMAIN, $secure, true);
 
-		if (get_option('onelogin_saml_forcelogin') && get_option('onelogin_saml_customize_stay_in_wordpress_after_slo')) {
-			wp_redirect(home_url().'/wp-login.php?loggedout=true');
+		// Always redirect to home or RelayState after logout, never show logout confirmation page
+		if (isset($_REQUEST['RelayState'])) {
+			redirect_to_relaystate_if_trusted($_REQUEST['RelayState']);
 		} else {
-			if (isset($_REQUEST['RelayState'])) {
-				redirect_to_relaystate_if_trusted($_REQUEST['RelayState']);
-			} else {
-				wp_redirect(home_url());
-			}
+			wp_redirect(home_url());
 		}
 		exit();
 	} else {
