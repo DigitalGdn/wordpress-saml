@@ -99,6 +99,20 @@ function checkIsExternalURLAllowed($url, $trustedSites = [])
 }
 
 function saml_custom_login_footer() {
+	// Don't show SAML login link on specific pages unless keep_local_login is enabled
+	$keep_local_login = get_option('onelogin_saml_keep_local_login', false);
+	
+	// Don't show on 2FA screen, logout screen, or other special actions
+	$action = isset($_GET['action']) ? $_GET['action'] : 'login';
+	$is_loggedout = isset($_GET['loggedout']) && $_GET['loggedout'];
+	
+	// Only show the SAML login link if:
+	// 1. Keep local login is enabled, AND
+	// 2. We're on the regular login page (not 2FA, not logout confirmation, etc.)
+	if (!$keep_local_login || $action !== 'login' || $is_loggedout) {
+		return '';
+	}
+	
 	$saml_login_message = get_option('onelogin_saml_customize_links_saml_login');
 	if (empty($saml_login_message)) {
 		$saml_login_message = "SAML Login";
