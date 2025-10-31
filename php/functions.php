@@ -212,6 +212,8 @@ function saml_slo() {
         		$nameIdSPNameQualifier = sanitize_text_field($_COOKIE[SAML_NAMEID_SP_NAME_QUALIFIER_COOKIE]);
     		}
 
+			// Don't call wp_logout() here - we need the session data for IdP logout
+			// Logout will be handled when IdP redirects back to saml_sls endpoint
 			$auth = initialize_saml();
 			if ($auth == false) {
 				wp_redirect(home_url());
@@ -585,13 +587,15 @@ function saml_sls() {
 
 	$retrieve_parameters_from_server = get_option('onelogin_saml_advanced_settings_retrieve_parameters_from_server', false);
 	if (isset($_GET) && isset($_GET['SAMLRequest'])) {
-		// Close session before send the LogoutResponse to the IdP
+		// IdP-initiated logout: Close session before sending the LogoutResponse to the IdP
 		$auth->processSLO(false, null, $retrieve_parameters_from_server, 'wp_logout');
 	} else {
+		// SP-initiated logout: Process the SAMLResponse from IdP
 		$auth->processSLO(false, null, $retrieve_parameters_from_server);
 	}
 	$errors = $auth->getErrors();
 	if (empty($errors)) {
+		// Destroy WordPress session after successful SLO processing
 		wp_logout();
 		$secure = is_ssl();
 		setcookie(SAML_LOGIN_COOKIE, 0, time() - 3600, SITECOOKIEPATH, COOKIE_DOMAIN, $secure, true);
