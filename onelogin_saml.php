@@ -55,7 +55,7 @@ if (is_multisite()) {
 	add_action('network_admin_edit_network_saml_enabler', 'onelogin_saml_configuration_multisite_enabler');
 }
 
-if (!is_saml_enabled()) {
+if (!is_saml_enabled() || post_password_required()) {
 	return;
 }
 
