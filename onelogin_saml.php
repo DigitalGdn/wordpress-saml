@@ -81,9 +81,10 @@ if (isset($_GET['saml_sso'])) {
 	add_action('init', 'saml_sso', 1);
 } else {
 	$execute_sso = false;
-	$saml_actions = isset($_GET['saml_metadata']) || (strpos($_SERVER['SCRIPT_NAME'], 'alternative_acs.php') !== FALSE);
+	$script_name = isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : '';
+	$saml_actions = isset($_GET['saml_metadata']) || (strpos($script_name, 'alternative_acs.php') !== FALSE);
 
-	$wp_login_page = (strpos($_SERVER['SCRIPT_NAME'], 'wp-login.php') !== FALSE) && $action == 'login' && !isset($_GET['loggedout']);
+	$wp_login_page = (strpos($script_name, 'wp-login.php') !== FALSE) && $action == 'login' && !isset($_GET['loggedout']);
 
 	$want_to_local_login = isset($_GET['normal']) || (isset($_POST['log']) && isset($_POST['pwd']));
 	$want_to_reset = $action == 'lostpassword' || $action == 'rp' || $action == 'resetpass' || (isset($_GET['checkemail']) &&  $_GET['checkemail'] == 'confirm');
@@ -123,7 +124,8 @@ function onelogin_enqueue_script() {
 	wp_enqueue_script( 'onelogin-hide-login-form', plugins_url( 'assets/js/hide-login-form.js', __FILE__ ), array('jquery'), null, true );
 }
 
-if ((strpos($_SERVER['SCRIPT_NAME'], 'wp-login.php') !== FALSE) && $action == 'login' && !isset($_GET['normal'])) {
+$script_name_check = isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : '';
+if ((strpos($script_name_check, 'wp-login.php') !== FALSE) && $action == 'login' && !isset($_GET['normal'])) {
 	if (!get_option('onelogin_saml_keep_local_login', false)) {
 		add_action( 'login_enqueue_scripts', 'onelogin_enqueue_script', 10 );
 	}
